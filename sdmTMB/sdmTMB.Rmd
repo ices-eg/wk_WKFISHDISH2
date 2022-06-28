@@ -1,0 +1,169 @@
+---
+title: "sdmTMB"
+output: html_document
+date: "2022-06-28"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 999)
+```
+
+```{r, iclude = F}
+library(dplyr)
+library(ggplot2)
+library(sdmTMB)
+library(tidyr)
+```
+
+```{r, read data,echo=F}
+load('../data/data.list.RData')
+load('../data/pred.grid.fine.RData')
+grid=pred.grid.fine$Gadus_morhua
+grid=bind_rows(grid,.id = 'Year')
+#grid$HaulDur=30
+#grid$HaulDur=NULL
+# convert into df 
+```
+
+```{r, echo=F}
+dat=data.list[[1]]
+dat$Year=as.integer(as.character(dat$Year))
+dat$GearCat=as.factor(dat$GearCat)
+dat$factor=1/dat$SweptArea
+dat$bio.adult=dat$bio.adult*dat$factor
+
+```
+
+```{r, mesh,echo=F}
+#download map sf
+map <- rnaturalearth::ne_countries(
+  scale = "medium",
+  returnclass = "sf", continent  = "europe")
+
+#ggplot(map) + geom_sf()+xlim(-12,30)+ylim(47,62)
+
+dat=dat %>% filter(!Year %in% c(1967,1968))
+
+mesh <- make_mesh(dat, xy_cols = c("lon", "lat"), type =c('kmeans'),n_knots=300, seed=123)
+# add barrier mesh
+mesh = add_barrier_mesh(
+  mesh,map, range_fraction = 0.1,
+  proj_scaling = 1, plot = FALSE
+)
+
+
+```
+
+## Mesh 
+
+```{r}
+# 300 knots
+plot(mesh)
+```
+
+## Model specifications
+
+```{r,cache=TRUE}
+m1 <- sdmTMB(
+  bio.adult ~ 0 + as.factor(Year) + GearCat + s(Month, bs = "cc", k = 10),
+  data = dat,
+  mesh = mesh,
+  offset = log(dat$SweptArea),
+  family = tweedie(link = "log"),
+  spatial = "on",
+  time = "Year",
+  spatiotemporal = "IID"
+)
+```
+
+## Some diagnostics
+
+```{r}
+dat$resids <- residuals(m1) # randomized quantile residuals
+
+hist(dat$resids)
+
+qqnorm(dat$resids[is.finite(dat$resids)])
+qqline(dat$resids[is.finite(dat$resids)])
+
+```
+
+```{r,fig.height=15,fig.width=8}
+# check spatial autocorrelation
+ggplot(filter(dat,Year%%5==1), aes(lon, lat, col = resids)) +
+  scale_colour_gradient2() +
+  geom_point() + geom_sf(data=map,inherit.aes = FALSE)+xlim(-12,30)+ylim(47,62)+
+  facet_wrap(~Year,ncol=2) 
+```
+
+## Terms
+
+```{r}
+m1
+```
+
+
+```{r,include=FALSE}
+#g <- visreg::visreg(fit, xvar = "GearCat", gg = TRUE)
+#plot(g)
+visreg::visreg(m1, xvar = "Month")
+```
+
+## Predict onto the grid
+
+```{r}
+grid=grid %>% filter(!Year %in% c(1967,1968))
+grid$Year=as.integer(grid$Year)
+dat %>% group_by(GearCat) %>% summarise(n=n())
+grid$GearCat = 'GOV_CL'
+# calculate the mode of month
+# getmode=function(x){uniq=unique(x)
+# uniq[which.max(tabulate(match(x,uniq)))]}
+# getmode(dat$Month) Month set to 9
+grid$Month = 9
+
+p <- predict(m1, newdata = grid)
+```
+
+```{r,echo=FALSE}
+plot_map <- function(dat, column) {
+  ggplot(dat, aes_string("lon", "lat", fill = column)) +
+    geom_raster() +geom_sf(data=map,inherit.aes = FALSE)+xlim(-12,30)+ylim(47,62)
+}
+
+```
+
+## Spatial random fields
+
+```{r}
+plot_map(p, "omega_s") +
+  scale_fill_gradient2() +
+  ggtitle("Spatial random effects only")
+```
+
+## Spatio-temporal random fields
+
+```{r,fig.height=15,fig.width=8}
+plot_map(filter(p,Year%%5==1), "epsilon_st") +
+  scale_fill_gradient2() +
+  facet_wrap(~Year,ncol = 2) +
+  ggtitle("Spatiotemporal random effects only")
+```
+
+
+
+```{r,fig.height=15,fig.width=8}
+plot_map(filter(p,Year%%5==1), "exp(est)/1000") +
+  scale_fill_viridis_c(
+    trans = "pseudo_log",
+    # trim extreme high values to make spatial variation more visible
+    na.value = "yellow", limits = c(0, quantile(exp(p$est)/1000, 0.995)),'cod adult biomass \n (kg km^-2)'
+  ) +
+  ggtitle("Prediction (fixed effects + all random effects)",
+    subtitle = paste("maximum estimated biomass density (whole time series) =", round(max(exp(p$est))/1000))
+  )+facet_wrap(~Year,ncol=2)
+```
+
