@@ -34,6 +34,7 @@ dat$Year=as.integer(as.character(dat$Year))
 dat$GearCat=as.factor(dat$GearCat)
 dat$factor=1/dat$SweptArea
 dat$bio.adult=dat$bio.adult*dat$factor
+dat$YearF=as.factor(dat$Year)
 
 ```
 
@@ -68,7 +69,7 @@ plot(mesh)
 
 ```{r,cache=TRUE}
 m1 <- sdmTMB(
-  bio.adult ~ 0 + as.factor(Year) + GearCat + s(Month, bs = "cc", k = 10),
+  bio.adult ~ 0 + YearF + GearCat + s(Month, bs = "cc", k = 10),
   data = dat,
   mesh = mesh,
   offset = log(dat$SweptArea),
@@ -106,10 +107,17 @@ m1
 ```
 
 
-```{r,include=FALSE}
+```{r,cach=TRUE}
 #g <- visreg::visreg(fit, xvar = "GearCat", gg = TRUE)
 #plot(g)
-visreg::visreg(m1, xvar = "Month")
+p1=visreg::visreg(m1, xvar = "GearCat", gg = TRUE)
+p2=visreg::visreg(m1, xvar = "YearF",gg = TRUE)
+p3=visreg::visreg(m1, xvar = "Month",gg = TRUE)
+p1
+p2
+p3
+
+
 ```
 
 ## Predict onto the grid
@@ -117,6 +125,7 @@ visreg::visreg(m1, xvar = "Month")
 ```{r}
 grid=grid %>% filter(!Year %in% c(1967,1968))
 grid$Year=as.integer(grid$Year)
+grid$YearF=as.factor(grid$Year)
 dat %>% group_by(GearCat) %>% summarise(n=n())
 grid$GearCat = 'GOV_CL'
 # calculate the mode of month
